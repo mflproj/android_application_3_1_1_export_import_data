@@ -22,7 +22,9 @@ import com.siliconlab.bluetoothmesh.adk.data_model.element.Element
 import com.siliconlab.bluetoothmesh.adk.data_model.node.Node
 import com.siliconlab.bluetoothmesh.adk.data_model.subnet.Subnet
 import com.siliconlabs.bluetoothmesh.App.Models.BluetoothConnectableDevice
+import com.siliconlabs.bluetoothmesh.App.Models.NetworkImport
 import java.util.*
+
 
 class NetworkConnectionLogic(private val context: Context,
                              private val connectableDeviceHelper: ConnectableDeviceHelper,
@@ -30,6 +32,8 @@ class NetworkConnectionLogic(private val context: Context,
     private val TAG: String = javaClass.canonicalName!!
 
     private val uiHandler: Handler = Handler(Looper.getMainLooper())
+
+    var networkImportList : MutableList<NetworkImport> = mutableListOf()
 
     enum class ConnectionState {
         DISCONNECTED,
@@ -77,12 +81,38 @@ class NetworkConnectionLogic(private val context: Context,
             uiHandler.postDelayed({
                 this@NetworkConnectionLogic.bluetoothConnectableDevice = bluetoothConnectableDevice
                 bluetoothConnectableDevice.addDeviceConnectionCallback(this@NetworkConnectionLogic)
-
+                var connectedToProxy = false
                 proxyConnection = ProxyConnection(bluetoothConnectableDevice)
+                //Retrieve IV index for network to initialize network after importing into database
+                proxyConnection!!.observeSecureNetworkBeacon(object: SecureNetworkBeaconCallback
+                {
+                    override fun success(p0: Int, p1: Boolean, p2: Boolean, fourIndex: Int) {
+                        val node = getNode(bluetoothConnectableDevice)
+                        val networkUuid = node?.subnets?.first()?.network?.uuid
+                        if(networkUuid != null)
+                        {
+                            val netImport = networkImportList.find { x -> x.uuid == networkUuid }
+                            if(netImport == null)
+                            {
+                                networkImportList.add(NetworkImport(uuid = networkUuid, fourIndex = fourIndex, provisionerAddress = node.primaryElementAddress!!))
+                            }
+                            else
+                            {
+                                netImport.fourIndex = fourIndex
+                                netImport.provisionerAddress = node.primaryElementAddress!!
+                            }
+                        }
+                        Log.i(TAG, "p0: $p0, p1: $p1, p2: $p2, fourIndex: $fourIndex")
+                        if(connectedToProxy)
+                        {
+                            setCurrentState(ConnectionState.CONNECTED)
+                        }
+                    }
+                })
                 proxyConnection!!.connectToProxy(refreshBluetoothDevice, object : ConnectionCallback {
                     override fun success(device: ConnectableDevice) {
+                        connectedToProxy = true
                         Log.d(TAG, "ConnectionCallback success")
-                        setCurrentState(ConnectionState.CONNECTED)
                     }
 
                     override fun error(device: ConnectableDevice, error: ErrorType) {
@@ -290,6 +320,11 @@ class NetworkConnectionLogic(private val context: Context,
     }
 
     fun getCurrentlyConnectedNode(): Node? {
+        return connectableDeviceHelper.findNode(bluetoothConnectableDevice)
+    }
+
+    //Get node element for given BluetoothConnectableDevice
+    fun getNode(bluetoothConnectableDevice: BluetoothConnectableDevice): Node? {
         return connectableDeviceHelper.findNode(bluetoothConnectableDevice)
     }
 }
